@@ -106,8 +106,6 @@ def read_data(path:str) -> dict:
 
 
 
-data = read_data("../data/curated_leffingwell.csv")
-m = Molecule(data["smiles"][23])
 
 
 

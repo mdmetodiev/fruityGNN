@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
+from torch.utils.data import DataLoader
+from gnn.utils.datareader import MoleculeData
 
-from torch_geometric.data import Data, DataLoader
 from torch_scatter import scatter_add  # for sum aggregation in message passing
 from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.model_selection import train_test_split
@@ -136,35 +136,6 @@ class FruityGNN(nn.Module):
         return out
 
 # ---------------------------
-# Data Conversion Function
-# ---------------------------
-def molecule_to_data(mol_obj, label, global_dim=50):
-    """
-    Convert an instance of your Molecule class (mol_obj) into a PyG Data object.
-    Assumes:
-      - mol_obj.nodes: list of atomic numbers (ints)
-      - mol_obj.edges: list of bond types (ints)
-      - mol_obj.adjacency_list: list of tuples (i, j) for edge connections.
-      
-    Instead of using precomputed chemical properties, we initialize a learned global context
-    vector (here simply as zeros, to be updated during message passing).
-    """
-    # Node features: atomic numbers.
-    x = torch.tensor(mol_obj.nodes, dtype=torch.long)
-    # Edge indices: convert list of tuples to a tensor [2, E]. (Note: Molecule stores (target, source))
-    edge_index = torch.tensor(mol_obj.adjacency_list, dtype=torch.long).t().contiguous()
-    # Edge features: bond types.
-    edge_attr = torch.tensor(mol_obj.edges, dtype=torch.long)
-    # Initialize a learned global context vector for the graph (to be updated via message passing).
-    global_attr = torch.zeros((1, global_dim), dtype=torch.float)  # Shape: [1, global_dim]
-    # Label for the graph.
-    y = torch.tensor([label], dtype=torch.float)
-    
-    data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr,
-                global_attr=global_attr, y=y)
-    return data
-
-# ---------------------------
 # Example Dataset Preparation
 # ---------------------------
 # Assume you have:
@@ -175,27 +146,14 @@ def molecule_to_data(mol_obj, label, global_dim=50):
 #
 # Example:
 
-TRAIN = False 
+TRAIN = True 
 
 if TRAIN == True:
 
-    from molecules import read_data, Molecule
 
-    all_data = read_data("../data/curated_leffingwell.csv") 
 
-    smiles_list = all_data["smiles"]
-    labels = all_data["fruity"]
-
-    # Convert to PyG Data objects.
-    # from your_molecule_module import Molecule  # your Molecule class
-    dataset = []
-    for smi, lab in zip(smiles_list, labels):
-        mol = Molecule(smi)
-        data = molecule_to_data(mol, lab)
-        dataset.append(data)
-
-    # For illustration, let's assume 'dataset' is now a list of Data objects.
-    # We then split into training and test sets.
+    dataset = MoleculeData("gnn/data/curated_leffingwell.csv") 
+    """
     train_data, test_data = train_test_split(dataset, test_size=0.2, random_state=42)
     train_loader = DataLoader(train_data, batch_size=32, shuffle=True)
     test_loader = DataLoader(test_data, batch_size=32)
@@ -256,4 +214,4 @@ if TRAIN == True:
     # ---------------------------
     torch.save(model.state_dict(), "fruitygnn_model.pth")
     print("Model saved to fruitygnn_model.pth")
-
+"""

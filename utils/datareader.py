@@ -1,6 +1,6 @@
 from networkx import adjacency_data
 import pandas as pd
-from molecule import Molecule
+from gnn.utils.molecule import Molecule
 from torch.utils.data import Dataset
 from typing import List
 import torch
