@@ -1,0 +1,5 @@
+pyrightconfig.json
+**/__pycache__
+model/play.py
+test.py
+
