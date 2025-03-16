@@ -1,12 +1,13 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
-from gnn.utils.datareader import MoleculeData
+from torch.utils.data import random_split
+from torch_geometric.data import DataLoader
+from gnnfruity.utils.datareader import MoleculeGraphDataset 
 
 from torch_scatter import scatter_add  # for sum aggregation in message passing
 from sklearn.metrics import accuracy_score, roc_auc_score
-from sklearn.model_selection import train_test_split
+
 
 # ---------------------------
 # Custom GNN Layer Definition
@@ -40,11 +41,11 @@ class FruityGNNLayer(nn.Module):
             nn.Linear(global_dim, global_dim)
         )
         
-    def forward(self, x, edge_index, edge_attr, global_attr, batch):
+    def forward(self, x, edge_index, edge_attr, global_context_vector, batch):
         # x: [N, node_dim] node embeddings.
         # edge_index: [2, E] connectivity.
         # edge_attr: [E, edge_dim] edge embeddings.
-        # global_attr: [num_graphs, global_dim] global context for each graph.
+        # global_context_vector: [num_graphs, global_dim] global context for each graph.
         # batch: [N] mapping from nodes to their corresponding graph.
         
         source, target = edge_index  # source and target node indices per edge.
@@ -55,14 +56,14 @@ class FruityGNNLayer(nn.Module):
         # Sum-aggregate messages at each target node.
         agg_msg = scatter_add(msg, target, dim=0, dim_size=x.size(0))
         # Lookup the global context for each node based on its graph assignment.
-        global_per_node = global_attr[batch]
+        global_per_node = global_context_vector[batch]
         # Update node embeddings conditioned on its old state, aggregated messages, and global context.
         x_updated = self.node_update_mlp(torch.cat([x, agg_msg, global_per_node], dim=-1))
         
         # --- Edge Message Passing ---
         # For each edge, condition on its current state, the features of its source and target nodes,
         # and the corresponding global context (here taken from the source node’s graph).
-        edge_global = global_attr[batch[source]]
+        edge_global = global_context_vector[batch[source]]
         edge_updated = self.edge_update_mlp(torch.cat([edge_attr, x[source], x[target], edge_global], dim=-1))
         
         # --- Global Message Passing ---
@@ -70,9 +71,9 @@ class FruityGNNLayer(nn.Module):
         agg_nodes = scatter_add(x_updated, batch, dim=0)
         # For edges, we assume each edge belongs to the same graph as its source node.
         edge_batch = batch[source]
-        agg_edges = scatter_add(edge_updated, edge_batch, dim=0, dim_size=global_attr.size(0))
+        agg_edges = scatter_add(edge_updated, edge_batch, dim=0, dim_size=global_context_vector.size(0))
         # Concatenate the previous global context with aggregated node and edge messages.
-        global_input = torch.cat([global_attr, agg_nodes, agg_edges], dim=-1)
+        global_input = torch.cat([global_context_vector, agg_nodes, agg_edges], dim=-1)
         global_updated = self.global_update_mlp(global_input)
         
         return x_updated, edge_updated, global_updated
@@ -117,7 +118,7 @@ class FruityGNN(nn.Module):
               - x: [N] long tensor (atomic numbers)
               - edge_index: [2, E] long tensor (edge connectivity)
               - edge_attr: [E] long tensor (bond types)
-              - global_attr: [num_graphs, global_dim] tensor (initialized global context)
+              - global_context_vector: [num_graphs, global_dim] tensor (initialized global context)
               - batch: [N] long tensor mapping nodes to graphs
               - y: [num_graphs] target labels (optional)
         """
@@ -125,14 +126,14 @@ class FruityGNN(nn.Module):
         x = self.node_embedding(data.x)           # shape: [N, node_dim]
         edge_attr = self.edge_embedding(data.edge_attr)  # shape: [E, edge_dim]
         # Use the provided global context; this is a learned vector for each graph.
-        global_attr = data.global_attr             # shape: [num_graphs, global_dim]
+        global_context_vector = data.global_context_vector             # shape: [num_graphs, global_dim]
         
         # Sequential message passing through the layers.
         for layer in self.layers:
-            x, edge_attr, global_attr = layer(x, data.edge_index, edge_attr, global_attr, data.batch)
+            x, edge_attr, global_context_vector = layer(x, data.edge_index, edge_attr, global_context_vector, data.batch)
             
         # Final prediction from the updated global context.
-        out = self.classifier(global_attr).squeeze(-1)  # shape: [num_graphs]
+        out = self.classifier(global_context_vector).squeeze(-1)  # shape: [num_graphs]
         return out
 
 # ---------------------------
@@ -146,22 +147,25 @@ class FruityGNN(nn.Module):
 #
 # Example:
 
+
+
 TRAIN = True 
 
 if TRAIN == True:
 
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    print(f"using {device} as device")
+    dataset = MoleculeGraphDataset("data/curated_leffingwell.csv", device=device) 
+    train_data, test_data = random_split(dataset, [0.2, 0.8])
+    
 
-
-    dataset = MoleculeData("gnn/data/curated_leffingwell.csv") 
-    """
-    train_data, test_data = train_test_split(dataset, test_size=0.2, random_state=42)
     train_loader = DataLoader(train_data, batch_size=32, shuffle=True)
     test_loader = DataLoader(test_data, batch_size=32)
 
     # ---------------------------
     # Training Loop
     # ---------------------------
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = FruityGNN(num_layers=4, node_dim=50, edge_dim=50, global_dim=50,
                       max_atomic_num=100, num_edge_types=5).to(device)
     criterion = nn.BCELoss()  # since our classifier already applies sigmoid
@@ -214,4 +218,3 @@ if TRAIN == True:
     # ---------------------------
     torch.save(model.state_dict(), "fruitygnn_model.pth")
     print("Model saved to fruitygnn_model.pth")
-"""
